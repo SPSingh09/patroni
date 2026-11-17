@@ -62,12 +62,17 @@ the value of ``synchronous_standby_names`` as follows:
 1. **Last known sync nodes are available in the** ``/sync`` key in DCS Patroni
    sets (or keeps) ``synchronous_standby_names`` to the nodes stored there.
    For example, if ``/sync`` contains ``leader=node1, sync_standby=node2,node3``
-   and both standbys stop streaming, Patroni will continue using::
+   (``synchronous_node_count: 2``) and both standbys stop streaming, Patroni will
+   continue using::
 
-       synchronous_standby_names = 'node2,node3'
+       synchronous_standby_names = '2 (node2,node3)'
 
    because those nodes are the last ones known to have received the latest
-   commit. Commits will block until at least one of them reconnects.
+   commit and any of them is allowed to be promoted. Commits will block until
+   both of them reconnect. With ``synchronous_mode: quorum`` the value is
+   ``ANY N (node2,node3)``, where ``N`` is the number of nodes in ``/sync``
+   minus ``quorum`` (e.g. ``ANY 1 (node2,node3)``), and commits will block
+   until ``N`` of them reconnect.
 
 2. **Manual failover to an asynchronous node** – When a node that was not in the
    ``/sync`` key is promoted (e.g. via ``patronictl failover --force``), it sets
@@ -92,7 +97,7 @@ the value of ``synchronous_standby_names`` as follows:
    ``patroni.yaml``. Patroni will refuse to start if this name is configured.
 
 When strict mode is active, Patroni emits a log warning:
-``"No active replication connections and synchronous_mode_strict is requested. Commits will be delayed."``
+``"No active replication connections from Patroni members and synchronous_mode_strict is requested. Commits will be delayed."``
 This warning is emitted once per activation event, not on every HA loop iteration.
 
 You can ensure that a standby never becomes the synchronous standby by setting ``nosync`` tag to true. This is recommended to set for standbys that are behind slow network connections and would cause performance degradation when becoming a synchronous standby. Setting tag ``nostream`` to true will also have the same effect.
@@ -129,7 +134,7 @@ When in synchronous mode Patroni maintains synchronization state in the DCS (``/
 
 Patroni will only assign one or more synchronous standby nodes based on ``synchronous_node_count`` parameter to ``synchronous_standby_names``.
 
-A standby is published as synchronous in the ``/sync`` key only after Patroni has verified that the new value of ``synchronous_standby_names`` is effectively applied: ``pg_stat_replication`` reports the expected ``sync_state`` and the standby has caught up with the primary's WAL position at the time of the change. When ``synchronous_standby_names`` changes from an empty value (for example, the first synchronous standby connects, or Patroni is restarted), commits start waiting for synchronous standbys only after the checkpointer process has handled the configuration reload. Patroni treats this as confirmed when a checkpoint has started since the reload, or (from PostgreSQL v10) when the checkpointer is idle or, from v14, is running a spread checkpoint on schedule. If neither is seen within about a second, typically because the checkpointer is busy with an immediate checkpoint (for example right after promote) or a checkpoint that is behind schedule, Patroni executes ``CHECKPOINT`` to make sure the new value is enforced.
+A standby is published as synchronous in the ``/sync`` key only after Patroni has verified that the new value of ``synchronous_standby_names`` is effectively applied: ``pg_stat_replication`` reports the expected ``sync_state`` and the standby has caught up with the primary's WAL position at the time of the change. When ``synchronous_standby_names`` changes from an empty value (for example, the first synchronous standby connects, or Patroni is restarted), commits start waiting for synchronous standbys only after the checkpointer process has handled the configuration reload. Patroni treats this as confirmed when a checkpoint has started since the reload, or (from PostgreSQL v14) when the checkpointer is idle or running a spread checkpoint on schedule. If neither is seen within about a second, typically because the checkpointer is busy with an immediate checkpoint (for example right after promote) or a checkpoint that is behind schedule, Patroni executes ``CHECKPOINT`` to make sure the new value is enforced. Standbys that are already listed in the ``/sync`` key (for example, after Patroni restart) remain there if the verification succeeds within a couple of seconds, otherwise they are removed from it until the verification succeeds. Similarly, before promoting a standby whose new ``synchronous_standby_names`` value is not empty (strict synchronous mode or quorum commit mode), Patroni waits up to ``loop_wait`` seconds until it is confirmed that the checkpointer enforces it, otherwise transactions committed right after promote might not be replicated. From PostgreSQL v14 this usually takes about a second; older versions, or a busy checkpointer, require a ``CHECKPOINT`` (a restartpoint on the standby). If the verification doesn't succeed in time, the standby is promoted anyway and a warning is logged.
 
 On each HA loop iteration Patroni re-evaluates synchronous standby nodes choice. If the current list of synchronous standby nodes are connected and has not requested its synchronous status to be removed it remains picked. Otherwise the cluster members available for sync that are furthest ahead in replication are picked.
 
